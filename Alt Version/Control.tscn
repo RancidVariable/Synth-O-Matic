@@ -1,0 +1,1421 @@
+[gd_scene load_steps=15 format=3 uid="uid://ccm8ycjie3pn5"]
+
+[ext_resource type="Script" path="res://Alt Version/scripts/AudioControl.gd" id="1_1d0ai"]
+[ext_resource type="Script" path="res://Alt Version/scripts/AudioContainer.gd" id="2_ehpel"]
+[ext_resource type="AudioStream" uid="uid://coptqhkj7ywk1" path="res://Metronome_120bpm.wav" id="3_v5dx6"]
+[ext_resource type="Script" path="res://Alt Version/scripts/InstrumentButton.gd" id="4_g3vb2"]
+
+[sub_resource type="Shader" id="1"]
+code = "/*
+	Original shader by mrange (https://www.shadertoy.com/view/csfXzN)
+	Godot 3.5 port with customizable parameters by PmkExpert
+	As much as possible of the original has been kept, including comments
+	
+	MIT License
+
+*/
+
+// License CC0: Sea and moon
+//  Tinkering with the colors of an old shaders to make it a better fit for windows terminal
+
+shader_type canvas_item;
+
+//const float PI = 3.141592654;
+//const float TAU = 6.283185308;
+
+//Kept the original names, but they mostly change the waves' speed
+uniform float gravity : hint_range(0.0,25.0) = 1.0;
+uniform float waterTension : hint_range(0.0,10.0) = 0.01;
+
+//Generally, the shader is dark, so some colors have less effect than others overall
+uniform vec4 skyCol1 : source_color = vec4(0.6, 0.35, 0.3, 1.0);
+uniform vec4 skyCol2 : source_color = vec4(1.0, 0.3, 0.3, 1.0);
+uniform vec4 sunCol1 : source_color = vec4(1.0, 0.5, 0.4, 1.0);
+uniform vec4 sunCol2 : source_color = vec4(1.0, 0.8, 0.8, 1.0);
+uniform vec4 seaCol1 : source_color = vec4(0.1, 0.2, 0.2, 1.0);
+uniform vec4 seaCol2 : source_color = vec4(0.2, 0.9, 0.6, 1.0);
+
+//New uniforms made of values from the code for easier customization
+uniform float sunPosX : hint_range(-1.5,1.5) = 0.0; //The celestial body's position
+uniform float sunPosY : hint_range(-0.6,0.4) = 0.06; //The celestial body's altitude
+uniform float Zoom : hint_range(0.5,20.0) = 2.5; //How much close is the horizon
+uniform float sunShine : hint_range(0.1,100.0) = 1.0; //The amount of light emitted
+uniform float sunSize : hint_range(0.1,100.0) = 1.0; //Can make it appear better under sea level than sunPos
+uniform int seaNoise : hint_range(1,20) = 8; //Makes the sea appear differently
+uniform int crestSize : hint_range(1,20) = 4; //How big the waves' crests look
+uniform float seaLevel : hint_range(-0.5,0.5) = -0.1; //The horizon's level
+//Some other values in the code can be changed for different effects, but their behavior is less predictable
+
+// License: Unknown, author: Unknown, found: don't remember
+float tanh_approx(float x) {
+  //  Found this somewhere on the interwebs
+  //  return tanh(x);
+  float x2 = x*x;
+  return clamp(x*(27.0 + x2)/(27.0+9.0*x2), -1.0, 1.0);
+}
+
+vec2 wave(in float t, in float a, in float w, in float p) {
+  float x = t;
+  float y = a*sin(t*w + p);
+  return vec2(x, y);
+}
+
+vec2 dwave(in float t, in float a, in float w, in float p) {
+  float dx = 1.0;
+  float dy = a*w*cos(t*w + p);
+  return vec2(dx, dy);
+}
+
+vec2 gravityWave(in float t, in float a, in float k, in float h) {
+  float w = sqrt(gravity*k*tanh_approx(k*h));
+  return wave(t, a ,k, w*TIME);
+}
+
+vec2 capillaryWave(in float t, in float a, in float k, in float h) {
+  float w = sqrt((gravity*k + waterTension*k*k*k)*tanh_approx(k*h));
+  return wave(t, a, k, w*TIME);
+}
+
+vec2 gravityWaveD(in float t, in float a, in float k, in float h) {
+  float w = sqrt(gravity*k*tanh_approx(k*h));
+  return dwave(t, a, k, w*TIME);
+}
+
+vec2 capillaryWaveD(in float t, in float a, in float k, in float h) {
+  float w = sqrt((gravity*k + waterTension*k*k*k)*tanh_approx(k*h));
+  return dwave(t, a, k, w*TIME);
+}
+
+void mrot(inout vec2 p, in float a) {
+  float c = cos(a);
+  float s = sin(a);
+  p = vec2(c*p.x + s*p.y, -s*p.x + c*p.y);
+}
+
+vec4 sea(in vec2 p, in float ia) {
+  float y = 0.0;
+  vec3 d = vec3(0.0);
+
+  int maxIter = seaNoise;
+  int midIter = crestSize;
+
+  float kk = 1.0/1.3;
+  float aa = 1.0/(kk*kk);
+  float k = 1.0*pow(kk, -float(maxIter) + 1.0);
+  float a = ia*0.25*pow(aa, -float(maxIter) + 1.0);
+
+  float h = 25.0;
+  p *= 0.5;
+  
+  vec2 waveDir = vec2(0.0, 1.0);
+
+  for (int i = midIter; i < maxIter; ++i) {
+    float t = dot(-waveDir, p) + float(i);
+    y += capillaryWave(t, a, k, h).y;
+    vec2 dw = capillaryWaveD(-t, a, k, h);
+    
+    d += vec3(waveDir.x, dw.y, waveDir.y);
+
+    mrot(waveDir, PI/3.0);
+
+    k *= kk;
+    a *= aa;
+  }
+  
+  waveDir = vec2(0.0, 1.0);
+
+  for (int i = 0; i < midIter; ++i) {
+    float t = dot(waveDir, p) + float(i);
+    y += gravityWave(t, a, k, h).y;
+    vec2 dw = gravityWaveD(t, a, k, h);
+    
+    vec2 d2 = vec2(0.0, dw.x);
+    
+    d += vec3(waveDir.x, dw.y, waveDir.y);
+
+    mrot(waveDir, -step(2.0, float(i)));
+
+    k *= kk;
+    a *= aa;
+  }
+
+  vec3 t = normalize(d);
+  vec3 nxz = normalize(vec3(t.z, 0.0, -t.x));
+  vec3 nor = cross(t, nxz);
+
+  return vec4(y, nor);
+}
+
+vec3 sunDirection() {
+  vec3 dir = normalize(vec3(sunPosX, sunPosY, 1));
+  return dir;
+}
+
+vec3 skyColor(in vec3 rd) {
+  //Added code to change the colors to be modifiable shader params
+  vec3 skyCol1_ = skyCol1.xyz * 0.5;
+  vec3 skyCol2_ = skyCol2.xyz * 0.5;
+  
+  vec3 sunDir = sunDirection();
+  float sunDot = max(dot(rd, sunDir), 0.0);
+  vec3 final = vec3(0.0);
+  final += mix(skyCol1_, skyCol2_, rd.y);
+  final += 0.5*sunCol1.rgb*pow(sunDot, 90.0 / sunShine);
+  final += 4.0*sunCol2.rgb*pow(sunDot, 900.0 / sunSize);
+  return final;
+}
+
+vec3 render(in vec3 ro, in vec3 rd) {
+  //Added code to change the colors to be modifiable shader params
+  vec3 seaCol1_ = seaCol1.rgb * 0.2;
+  vec3 seaCol2_ = seaCol2.rgb * 0.5;
+  
+  vec3 col = vec3(0.0);
+
+  float dsea = (0.0 - ro.y)/rd.y;
+  
+  vec3 sunDir = sunDirection();
+  
+  vec3 sky = skyColor(rd);
+  
+  if (dsea > 0.0) {
+    vec3 p = ro + dsea*rd;
+    vec4 s = sea(p.xz, 1.0);
+    float h = s.x;    
+    vec3 nor = s.yzw;
+    nor = mix(nor, vec3(0.0, 1.0, 0.0), smoothstep(0.0, 200.0, dsea));
+
+    float fre = clamp(1.0 - dot(-nor,rd), 0.0, 1.0);
+    fre = fre*fre*fre;
+    float dif = mix(0.25, 1.0, max(dot(nor,sunDir), 0.0));
+    
+    vec3 refl = skyColor(reflect(rd, nor));
+    vec3 refr = seaCol1_ + dif*sunCol1.rgb*seaCol2_*0.1; 
+    
+    col = mix(refr, 0.9*refl, fre);
+    
+    float atten = max(1.0 - dot(vec2(dsea),vec2(dsea)) * 0.001, 0.0);
+    col += seaCol2_*(p.y - h) * 2.0 * atten;
+    
+    col = mix(col, sky, 1.0 - exp(-0.01*dsea));
+    
+  } else {
+    col = sky;
+  }
+  
+  return col;
+}
+
+void fragment() {
+  vec2 q = FRAGCOORD.xy/(1.0 / SCREEN_PIXEL_SIZE).xy;
+  vec2 p = -1. + 2. * q;
+  p.x *= (1.0 / SCREEN_PIXEL_SIZE).x/(1.0 / SCREEN_PIXEL_SIZE).y;
+
+  vec3 ro = vec3(0.0, 10.0, 0.0);
+  vec3 ww = normalize(vec3(0.0, seaLevel, 1.0));
+  vec3 uu = normalize(cross( vec3(0.0,1.0,0.0), ww));
+  vec3 vv = normalize(cross(ww,uu));
+  vec3 rd = normalize(p.x*uu + p.y*vv + Zoom*ww);
+
+  vec3 col = render(ro, rd);
+
+  COLOR.rgb = vec3(col);
+  COLOR.a = texture(TEXTURE, UV).a;
+}"
+
+[sub_resource type="ShaderMaterial" id="2"]
+shader = SubResource("1")
+shader_parameter/gravity = 1.0
+shader_parameter/waterTension = 0.01
+shader_parameter/skyCol1 = Color(0.898039, 0.415686, 1, 1)
+shader_parameter/skyCol2 = Color(1, 0.0196078, 0.0196078, 1)
+shader_parameter/sunCol1 = Color(0.4, 0.647059, 1, 1)
+shader_parameter/sunCol2 = Color(1, 0.321569, 0.145098, 1)
+shader_parameter/seaCol1 = Color(0, 0.505882, 1, 1)
+shader_parameter/seaCol2 = Color(0.435294, 0.745098, 1, 1)
+shader_parameter/sunPosX = 0.0
+shader_parameter/sunPosY = 0.139
+shader_parameter/Zoom = 1.535
+shader_parameter/sunShine = 10.98
+shader_parameter/sunSize = 4.956
+shader_parameter/seaNoise = 8
+shader_parameter/crestSize = 4
+shader_parameter/seaLevel = -0.338
+
+[sub_resource type="StyleBoxFlat" id="6"]
+bg_color = Color(0, 0, 0, 1)
+border_width_left = 5
+border_width_top = 5
+border_width_right = 5
+border_width_bottom = 5
+border_color = Color(0, 0.235294, 0.854902, 1)
+border_blend = true
+corner_radius_top_left = 15
+corner_radius_top_right = 15
+corner_radius_bottom_right = 15
+corner_radius_bottom_left = 15
+
+[sub_resource type="StyleBoxFlat" id="7"]
+bg_color = Color(0, 0, 0, 1)
+border_width_left = 5
+border_width_top = 5
+border_width_right = 5
+border_width_bottom = 5
+border_color = Color(0.854902, 0, 0.815686, 1)
+border_blend = true
+corner_radius_top_left = 15
+corner_radius_top_right = 15
+corner_radius_bottom_right = 15
+corner_radius_bottom_left = 15
+
+[sub_resource type="StyleBoxFlat" id="4"]
+bg_color = Color(0, 0, 0, 1)
+border_width_left = 5
+border_width_top = 5
+border_width_right = 5
+border_width_bottom = 5
+border_color = Color(0.847059, 0.0509804, 0.827451, 1)
+border_blend = true
+corner_radius_top_left = 15
+corner_radius_top_right = 15
+corner_radius_bottom_right = 15
+corner_radius_bottom_left = 15
+
+[sub_resource type="StyleBoxFlat" id="5"]
+bg_color = Color(0, 0, 0, 1)
+border_width_left = 5
+border_width_top = 5
+border_width_right = 5
+border_width_bottom = 5
+border_color = Color(0.439216, 0.0509804, 0.847059, 1)
+border_blend = true
+corner_radius_top_left = 15
+corner_radius_top_right = 15
+corner_radius_bottom_right = 15
+corner_radius_bottom_left = 15
+
+[sub_resource type="StyleBoxFlat" id="3"]
+bg_color = Color(0, 0, 0, 1)
+border_width_left = 5
+border_width_top = 5
+border_width_right = 5
+border_width_bottom = 5
+border_color = Color(0.0509804, 0.580392, 0.847059, 1)
+border_blend = true
+corner_radius_top_left = 15
+corner_radius_top_right = 15
+corner_radius_bottom_right = 15
+corner_radius_bottom_left = 15
+
+[sub_resource type="StyleBoxLine" id="8"]
+color = Color(0.498039, 0.117647, 0.521569, 1)
+thickness = 5
+
+[sub_resource type="StyleBoxFlat" id="9"]
+bg_color = Color(0, 0, 0, 1)
+border_width_left = 5
+border_width_top = 5
+border_width_right = 5
+border_width_bottom = 5
+border_color = Color(0, 0.694118, 0.854902, 1)
+border_blend = true
+corner_radius_top_left = 15
+corner_radius_top_right = 15
+corner_radius_bottom_right = 15
+corner_radius_bottom_left = 15
+
+[sub_resource type="StyleBoxFlat" id="10"]
+bg_color = Color(0, 0, 0, 1)
+border_width_left = 5
+border_width_top = 5
+border_width_right = 5
+border_width_bottom = 5
+border_color = Color(0.854902, 0, 0, 1)
+border_blend = true
+corner_radius_top_left = 15
+corner_radius_top_right = 15
+corner_radius_bottom_right = 15
+corner_radius_bottom_left = 15
+
+[node name="Control" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_1d0ai")
+
+[node name="Panel" type="Panel" parent="."]
+material = SubResource("2")
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="Bass" type="GridContainer" parent="."]
+layout_mode = 0
+offset_left = 25.0
+offset_top = 164.0
+offset_right = 1005.0
+offset_bottom = 204.0
+columns = 21
+script = ExtResource("2_ehpel")
+audioFolder = "res://Bass"
+
+[node name="LABEL" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/normal = SubResource("6")
+theme_override_styles/hover = SubResource("6")
+theme_override_styles/pressed = SubResource("7")
+text = "BASS"
+
+[node name="Bass0" type="Button" parent="Bass"]
+visible = false
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+
+[node name="Bass0" type="AudioStreamPlayer" parent="Bass/Bass0"]
+stream = ExtResource("3_v5dx6")
+volume_db = -8.0
+
+[node name="Bass1" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass1" type="AudioStreamPlayer" parent="Bass/Bass1"]
+volume_db = -8.0
+
+[node name="Bass2" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass2" type="AudioStreamPlayer" parent="Bass/Bass2"]
+volume_db = -8.0
+
+[node name="Bass3" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass3" type="AudioStreamPlayer" parent="Bass/Bass3"]
+volume_db = -8.0
+
+[node name="Bass4" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass4" type="AudioStreamPlayer" parent="Bass/Bass4"]
+volume_db = -8.0
+
+[node name="Bass5" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass5" type="AudioStreamPlayer" parent="Bass/Bass5"]
+volume_db = -8.0
+
+[node name="Bass6" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass6" type="AudioStreamPlayer" parent="Bass/Bass6"]
+volume_db = -8.0
+
+[node name="Bass7" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass7" type="AudioStreamPlayer" parent="Bass/Bass7"]
+volume_db = -8.0
+
+[node name="Bass8" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass8" type="AudioStreamPlayer" parent="Bass/Bass8"]
+volume_db = -8.0
+
+[node name="Bass9" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass9" type="AudioStreamPlayer" parent="Bass/Bass9"]
+volume_db = -8.0
+
+[node name="Bass10" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass10" type="AudioStreamPlayer" parent="Bass/Bass10"]
+volume_db = -8.0
+
+[node name="Bass11" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass11" type="AudioStreamPlayer" parent="Bass/Bass11"]
+volume_db = -8.0
+
+[node name="Bass12" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass12" type="AudioStreamPlayer" parent="Bass/Bass12"]
+volume_db = -8.0
+
+[node name="Bass13" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass13" type="AudioStreamPlayer" parent="Bass/Bass13"]
+volume_db = -8.0
+
+[node name="Bass14" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass14" type="AudioStreamPlayer" parent="Bass/Bass14"]
+volume_db = -8.0
+
+[node name="Bass15" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass15" type="AudioStreamPlayer" parent="Bass/Bass15"]
+volume_db = -8.0
+
+[node name="Bass16" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass16" type="AudioStreamPlayer" parent="Bass/Bass16"]
+volume_db = -8.0
+
+[node name="Bass17" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass17" type="AudioStreamPlayer" parent="Bass/Bass17"]
+volume_db = -8.0
+
+[node name="Bass18" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass18" type="AudioStreamPlayer" parent="Bass/Bass18"]
+volume_db = -8.0
+
+[node name="Bass19" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass19" type="AudioStreamPlayer" parent="Bass/Bass19"]
+volume_db = -8.0
+
+[node name="Bass20" type="Button" parent="Bass"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Bass20" type="AudioStreamPlayer" parent="Bass/Bass20"]
+volume_db = -8.0
+
+[node name="Drums" type="GridContainer" parent="."]
+layout_mode = 0
+offset_left = 25.0
+offset_top = 212.0
+offset_right = 1005.0
+offset_bottom = 252.0
+columns = 21
+script = ExtResource("2_ehpel")
+audioFolder = "res://80sKit"
+
+[node name="LABEL" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/normal = SubResource("6")
+theme_override_styles/hover = SubResource("6")
+theme_override_styles/pressed = SubResource("7")
+text = "DRUMS"
+
+[node name="Drums0" type="Button" parent="Drums"]
+visible = false
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+
+[node name="Drums0" type="AudioStreamPlayer" parent="Drums/Drums0"]
+stream = ExtResource("3_v5dx6")
+volume_db = -8.0
+
+[node name="Drums1" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums1" type="AudioStreamPlayer" parent="Drums/Drums1"]
+volume_db = -8.0
+
+[node name="Drums2" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums2" type="AudioStreamPlayer" parent="Drums/Drums2"]
+volume_db = -8.0
+
+[node name="Drums3" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums3" type="AudioStreamPlayer" parent="Drums/Drums3"]
+volume_db = -8.0
+
+[node name="Drums4" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums4" type="AudioStreamPlayer" parent="Drums/Drums4"]
+volume_db = -8.0
+
+[node name="Drums5" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums5" type="AudioStreamPlayer" parent="Drums/Drums5"]
+volume_db = -8.0
+
+[node name="Drums6" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums6" type="AudioStreamPlayer" parent="Drums/Drums6"]
+volume_db = -8.0
+
+[node name="Drums7" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums7" type="AudioStreamPlayer" parent="Drums/Drums7"]
+volume_db = -8.0
+
+[node name="Drums8" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums8" type="AudioStreamPlayer" parent="Drums/Drums8"]
+volume_db = -8.0
+
+[node name="Drums9" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums9" type="AudioStreamPlayer" parent="Drums/Drums9"]
+volume_db = -8.0
+
+[node name="Drums10" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums10" type="AudioStreamPlayer" parent="Drums/Drums10"]
+volume_db = -8.0
+
+[node name="Drums11" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums11" type="AudioStreamPlayer" parent="Drums/Drums11"]
+volume_db = -8.0
+
+[node name="Drums12" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums12" type="AudioStreamPlayer" parent="Drums/Drums12"]
+volume_db = -8.0
+
+[node name="Drums13" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums13" type="AudioStreamPlayer" parent="Drums/Drums13"]
+volume_db = -8.0
+
+[node name="Drums14" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums14" type="AudioStreamPlayer" parent="Drums/Drums14"]
+volume_db = -8.0
+
+[node name="Drums15" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums15" type="AudioStreamPlayer" parent="Drums/Drums15"]
+volume_db = -8.0
+
+[node name="Drums16" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums16" type="AudioStreamPlayer" parent="Drums/Drums16"]
+volume_db = -8.0
+
+[node name="Drums17" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums17" type="AudioStreamPlayer" parent="Drums/Drums17"]
+volume_db = -8.0
+
+[node name="Drums18" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums18" type="AudioStreamPlayer" parent="Drums/Drums18"]
+volume_db = -8.0
+
+[node name="Drums19" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums19" type="AudioStreamPlayer" parent="Drums/Drums19"]
+volume_db = -8.0
+
+[node name="Drums20" type="Button" parent="Drums"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="Drums20" type="AudioStreamPlayer" parent="Drums/Drums20"]
+volume_db = -8.0
+
+[node name="SynthChord" type="GridContainer" parent="."]
+layout_mode = 0
+offset_left = 25.0
+offset_top = 260.0
+offset_right = 1005.0
+offset_bottom = 300.0
+columns = 21
+script = ExtResource("2_ehpel")
+audioFolder = "res://SynthChord"
+
+[node name="LABEL" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/normal = SubResource("6")
+theme_override_styles/hover = SubResource("6")
+theme_override_styles/pressed = SubResource("7")
+text = "SYNTH"
+
+[node name="SynthChord0" type="Button" parent="SynthChord"]
+visible = false
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+
+[node name="SynthChord0" type="AudioStreamPlayer" parent="SynthChord/SynthChord0"]
+stream = ExtResource("3_v5dx6")
+volume_db = -8.0
+
+[node name="SynthChord1" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord1" type="AudioStreamPlayer" parent="SynthChord/SynthChord1"]
+volume_db = -8.0
+
+[node name="SynthChord2" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord2" type="AudioStreamPlayer" parent="SynthChord/SynthChord2"]
+volume_db = -8.0
+
+[node name="SynthChord3" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord3" type="AudioStreamPlayer" parent="SynthChord/SynthChord3"]
+volume_db = -8.0
+
+[node name="SynthChord4" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord4" type="AudioStreamPlayer" parent="SynthChord/SynthChord4"]
+volume_db = -8.0
+
+[node name="SynthChord5" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord5" type="AudioStreamPlayer" parent="SynthChord/SynthChord5"]
+volume_db = -8.0
+
+[node name="SynthChord6" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord6" type="AudioStreamPlayer" parent="SynthChord/SynthChord6"]
+volume_db = -8.0
+
+[node name="SynthChord7" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord7" type="AudioStreamPlayer" parent="SynthChord/SynthChord7"]
+volume_db = -8.0
+
+[node name="SynthChord8" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord8" type="AudioStreamPlayer" parent="SynthChord/SynthChord8"]
+volume_db = -8.0
+
+[node name="SynthChord9" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord9" type="AudioStreamPlayer" parent="SynthChord/SynthChord9"]
+volume_db = -8.0
+
+[node name="SynthChord10" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord10" type="AudioStreamPlayer" parent="SynthChord/SynthChord10"]
+volume_db = -8.0
+
+[node name="SynthChord11" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord11" type="AudioStreamPlayer" parent="SynthChord/SynthChord11"]
+volume_db = -8.0
+
+[node name="SynthChord12" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord12" type="AudioStreamPlayer" parent="SynthChord/SynthChord12"]
+volume_db = -8.0
+
+[node name="SynthChord13" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord13" type="AudioStreamPlayer" parent="SynthChord/SynthChord13"]
+volume_db = -8.0
+
+[node name="SynthChord14" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord14" type="AudioStreamPlayer" parent="SynthChord/SynthChord14"]
+volume_db = -8.0
+
+[node name="SynthChord15" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord15" type="AudioStreamPlayer" parent="SynthChord/SynthChord15"]
+volume_db = -8.0
+
+[node name="SynthChord16" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord16" type="AudioStreamPlayer" parent="SynthChord/SynthChord16"]
+volume_db = -8.0
+
+[node name="SynthChord17" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord17" type="AudioStreamPlayer" parent="SynthChord/SynthChord17"]
+volume_db = -8.0
+
+[node name="SynthChord18" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord18" type="AudioStreamPlayer" parent="SynthChord/SynthChord18"]
+volume_db = -8.0
+
+[node name="SynthChord19" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord19" type="AudioStreamPlayer" parent="SynthChord/SynthChord19"]
+volume_db = -8.0
+
+[node name="SynthChord20" type="Button" parent="SynthChord"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+size_flags_vertical = 3
+focus_mode = 0
+theme_override_styles/normal = SubResource("4")
+theme_override_styles/hover = SubResource("5")
+theme_override_styles/pressed = SubResource("3")
+action_mode = 0
+text = "x"
+script = ExtResource("4_g3vb2")
+
+[node name="SynthChord20" type="AudioStreamPlayer" parent="SynthChord/SynthChord20"]
+volume_db = -8.0
+
+[node name="PlayBar" type="HSlider" parent="."]
+layout_mode = 0
+offset_left = 139.0
+offset_top = 135.0
+offset_right = 987.0
+offset_bottom = 151.0
+theme_override_styles/slider = SubResource("8")
+max_value = 19.0
+editable = false
+scrollable = false
+
+[node name="Play" type="Button" parent="."]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 0
+offset_left = 25.0
+offset_top = 117.0
+offset_right = 125.0
+offset_bottom = 157.0
+size_flags_vertical = 3
+theme_override_styles/normal = SubResource("9")
+theme_override_styles/hover = SubResource("6")
+theme_override_styles/pressed = SubResource("7")
+text = "PLAY"
+
+[node name="Stop" type="Button" parent="."]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 0
+offset_left = 25.0
+offset_top = 308.0
+offset_right = 1005.0
+offset_bottom = 348.0
+size_flags_vertical = 3
+theme_override_styles/normal = SubResource("10")
+theme_override_styles/hover = SubResource("6")
+theme_override_styles/pressed = SubResource("7")
+text = "STOP"
+
+[node name="Label" type="Label" parent="."]
+layout_mode = 0
+offset_left = 90.0
+offset_top = 396.0
+offset_right = 929.0
+offset_bottom = 529.0
+text = "WELCOME TO THE SYNTH-O-MATIC. v1
+
+
+To create a random tune, click the buttons to assing them a number from 1-18, or X for Muted.
+
+Each segment lasts exactly 8 seconds, or 4 bars at 120bpm. The key of the instruments is C Minor just in case you were wondering.
+
+I will likely be adding more features to this down the line - if you like it, drop a comment please!
+
+
+
+-Azakaela-"
+
+[connection signal="pressed" from="Bass/LABEL" to="Bass" method="_on_LABEL_pressed"]
+[connection signal="finished" from="Bass/Bass0/Bass0" to="." method="_on_Bass0_finished"]
+[connection signal="pressed" from="Drums/LABEL" to="Drums" method="_on_LABEL_pressed"]
+[connection signal="pressed" from="SynthChord/LABEL" to="SynthChord" method="_on_LABEL_pressed"]
+[connection signal="pressed" from="Play" to="." method="_on_Play_pressed"]
+[connection signal="pressed" from="Stop" to="." method="_on_Stop_pressed"]
